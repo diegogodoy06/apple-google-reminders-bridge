@@ -52,12 +52,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bidirectional Apple Reminders and Google Tasks bridge."
     )
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--apple-json", type=Path, help="Previously exported remindctl JSON.")
     source.add_argument("--remindctl", type=Path, help="Path to an authorized remindctl executable.")
     parser.add_argument("--credentials", type=Path, required=True)
     parser.add_argument("--token", type=Path, required=True)
-    parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--state", type=Path)
+    parser.add_argument(
+        "--authorize-only",
+        action="store_true",
+        help="Connect a Google account without reading or changing reminders or tasks.",
+    )
+    parser.add_argument(
+        "--google-browser",
+        choices=("safari",),
+        help="Browser to open for the interactive Google authorization.",
+    )
     parser.add_argument("--tasklist-id", default="@default")
     parser.add_argument("--timezone", default="America/Sao_Paulo")
     parser.add_argument(
@@ -73,7 +83,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print only action counts and changes, omitting unchanged/skipped items.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.authorize_only and (not args.state or not (args.apple_json or args.remindctl)):
+        parser.error("sync requires --state and either --apple-json or --remindctl")
+    return args
 
 
 def load_apple_reminders(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -92,7 +105,13 @@ def load_apple_reminders(args: argparse.Namespace) -> list[dict[str, Any]]:
     return data
 
 
-def load_google_credentials(credentials_path: Path, token_path: Path) -> Credentials:
+def load_google_credentials(
+    credentials_path: Path,
+    token_path: Path,
+    *,
+    interactive: bool = False,
+    browser: str | None = None,
+) -> Credentials:
     credentials = None
     if token_path.exists():
         credentials = Credentials.from_authorized_user_file(token_path, SCOPES)
@@ -101,7 +120,13 @@ def load_google_credentials(credentials_path: Path, token_path: Path) -> Credent
         write_private_json(token_path, json.loads(credentials.to_json()))
     if not credentials or not credentials.valid:
         flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-        credentials = flow.run_local_server(port=0, open_browser=False)
+        credentials = flow.run_local_server(
+            host="127.0.0.1",
+            port=0,
+            open_browser=interactive,
+            browser=browser,
+            timeout_seconds=120,
+        )
         write_private_json(token_path, json.loads(credentials.to_json()))
     return credentials
 
@@ -572,6 +597,15 @@ def print_summary(actions: list[Action], mode: str, summary_only: bool = False) 
 
 def main() -> int:
     args = parse_args()
+    if args.authorize_only:
+        load_google_credentials(
+            args.credentials,
+            args.token,
+            interactive=True,
+            browser=args.google_browser,
+        )
+        print("Google account connected.")
+        return 0
     if args.apply and args.confirm != "APPLY":
         raise SystemExit("Refusing writes: use --apply --confirm APPLY.")
     zone = ZoneInfo(args.timezone)

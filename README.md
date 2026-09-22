@@ -14,6 +14,24 @@ Ponte local bidirecional, segura por padrão. A execução normal é uma simula�
 
 O aplicativo fica fora do Dock. Ele lê apenas os arquivos locais de estado e histórico, não abre portas de rede, não usa navegador e não recebe as credenciais do Google. Encerrar o aplicativo pelo menu lateral não interrompe a sincronização em segundo plano.
 
+## Beta autocontida (em validação)
+
+`build-beta-app.command` produz um único ZIP com `Reminders Sync Beta.app`. O pacote inclui o motor de sincronização e `remindctl`; o testador não instala Python ou utilitários separadamente. Nenhum JSON OAuth, token ou dado pessoal entra no ZIP. Esta versão é experimental e **ainda não é um release público**.
+
+Cada testador deve ativar a Google Tasks API no próprio projeto Google Cloud, configurar a tela de consentimento, criar um cliente OAuth do tipo **Aplicativo para computador** e baixar o JSON. Na aba **Contas**, importa esse arquivo, autoriza Apple Lembretes e conecta o Google pelo Safari. A aba **Visão geral** oferece uma prévia sem gravações antes de ativar a sincronização. Com o app ativo na barra de menus, ele verifica a cada cinco minutos; ao encerrar o app, para de executar. É possível ligar a abertura no login em **Ajustes**.
+
+O estado da beta fica separado em `~/Library/Application Support/RemindersSyncBeta`. Se o sincronizador antigo estiver instalado, a beta bloqueia a ativação; a migração do estado e o desligamento do serviço antigo devem ocorrer antes de usá-la neste Mac. Não importe credenciais de outra pessoa. Sem Developer ID, o ZIP tem assinatura local de teste e não está notarizado; o macOS pode exigir uma abertura manual.
+
+Para compilar em um Mac de desenvolvimento:
+
+```bash
+BRIDGE_BUILD_PYTHON=/caminho/python3.12 \
+BRIDGE_REMINDCTL=/caminho/remindctl \
+./build-beta-app.command
+```
+
+O build atual é para Apple Silicon. Antes de convidar testadores, ainda é necessário validar o fluxo de autorização, permissões do `remindctl` embutido, sincronização bidirecional e migração em um Mac limpo. A CLI `remindctl` embutida é distribuída sob licença MIT, incluída no pacote.
+
 ## Proteções
 
 - Tarefas Google sem a marca `[apple-reminders-bridge:v2]` nunca são alteradas nem copiadas para o Apple.

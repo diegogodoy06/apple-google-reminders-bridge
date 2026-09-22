@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import io
 import sys
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -15,6 +19,34 @@ bridge = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = bridge
 SPEC.loader.exec_module(bridge)
 ZONE = ZoneInfo("America/Sao_Paulo")
+
+
+class AuthorizationArgumentsTests(unittest.TestCase):
+    def test_authorize_only_does_not_require_apple_or_state(self):
+        with patch.object(sys, "argv", ["bridge.py", "--authorize-only", "--credentials", "client.json", "--token", "token.json"]):
+            args = bridge.parse_args()
+        self.assertTrue(args.authorize_only)
+        self.assertIsNone(args.state)
+
+    def test_sync_still_requires_apple_source_and_state(self):
+        with patch.object(sys, "argv", ["bridge.py", "--credentials", "client.json", "--token", "token.json"]):
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    bridge.parse_args()
+
+    def test_authorize_only_never_reads_reminders(self):
+        args = argparse.Namespace(
+            authorize_only=True,
+            credentials=Path("client.json"),
+            token=Path("token.json"),
+            google_browser="safari",
+        )
+        with patch.object(bridge, "parse_args", return_value=args), \
+             patch.object(bridge, "load_google_credentials") as authorize, \
+             patch.object(bridge, "load_apple_reminders", side_effect=AssertionError("read Apple")):
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.main(), 0)
+            authorize.assert_called_once()
 
 
 def apple(
