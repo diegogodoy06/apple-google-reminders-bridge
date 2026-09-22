@@ -1,0 +1,72 @@
+# Apple Lembretes ↔ Google Tasks
+
+Ponte local bidirecional, segura por padrão. A execução normal é uma simulação (`dry-run`); qualquer gravação exige explicitamente `--apply --confirm APPLY`.
+
+## Proteções
+
+- Tarefas Google sem a marca `[apple-reminders-bridge:v1]` nunca são alteradas nem copiadas para o Apple.
+- A associação usa o UUID do Apple Lembretes, não o título.
+- Exclusões não são propagadas automaticamente.
+- O estado e as credenciais locais recebem permissão `600`.
+- Lembretes com horário preservam a hora original nas notas. O Google Tasks mantém apenas a data.
+- Conclusão e reabertura são propagadas nos dois sentidos.
+- Se Apple e Google mudarem antes da próxima execução, a alteração mais recente vence.
+
+## Simulação
+
+```bash
+python bridge.py \
+  --apple-json /caminho/open-reminders.json \
+  --credentials /caminho/credentials.json \
+  --token /caminho/token.json \
+  --state /caminho/state.json \
+  --plan-json /caminho/plan.json
+```
+
+## Aplicação
+
+Revise primeiro o plano. Para efetivar somente as ações exibidas:
+
+```bash
+python bridge.py ... --apply --confirm APPLY
+```
+
+Para leitura e escrita ao vivo no Apple Lembretes, substitua `--apple-json` por `--remindctl /caminho/remindctl` e execute em um processo que possua permissão para acessar Lembretes.
+
+## Automação
+
+O intervalo padrão é de cinco minutos. `launchd.plist.template` contém a configuração do serviço; `run-sync.sh` executa uma sincronização bidirecional protegida e grava logs locais.
+
+Pré-requisitos:
+
+- macOS com Apple Lembretes e `remindctl` autorizado;
+- Python 3.10 ou superior;
+- Google Tasks API ativada;
+- credencial OAuth para aplicativo de computador e um `token.json` autorizado.
+
+Coloque `credentials.json` e `token.json` ao lado do instalador ou informe seus caminhos:
+
+```bash
+BRIDGE_PYTHON=/caminho/python3 \
+BRIDGE_REMINDCTL=/caminho/remindctl \
+BRIDGE_CREDENTIALS=/caminho/credentials.json \
+BRIDGE_TOKEN=/caminho/token.json \
+BRIDGE_STATE=/caminho/state.json \
+./install.command
+```
+
+O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra um agente do usuário e inicia a primeira sincronização.
+
+Para alterar o intervalo, edite `StartInterval` no template antes da instalação. O valor é expresso em segundos.
+
+## Testes
+
+```bash
+python test_bridge.py -v
+```
+
+Os testes cobrem criação, conclusão e reabertura nos dois sentidos, inicialização sem duplicatas e resolução de alterações concorrentes.
+
+## Privacidade
+
+Credenciais, tokens, estado, logs e ambientes virtuais são ignorados pelo Git. Nunca publique esses arquivos nem remova as regras correspondentes de `.gitignore`.
