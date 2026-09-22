@@ -30,15 +30,17 @@ private enum BetaPaths {
     }
 }
 
-private struct BetaRun: Identifiable {
+struct BetaRun: Identifiable {
     let id = UUID()
     let date: Date
     let summary: String
     let failed: Bool
+    let appleToGoogle: Int
+    let googleToApple: Int
 }
 
 @MainActor
-private final class BetaStore: ObservableObject {
+final class BetaStore: ObservableObject {
     @Published var page: Page = .accounts
     @Published var hasClient = false
     @Published var hasToken = false
@@ -51,6 +53,7 @@ private final class BetaStore: ObservableObject {
     @Published var notice = ""
     @Published var history: [BetaRun] = []
     @Published var mappingCount = 0
+    @Published var ignoredCount: Int?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var legacyInstallationPresent = false
 
@@ -83,6 +86,11 @@ private final class BetaStore: ObservableObject {
     }
 
     var ready: Bool { hasClient && hasToken && appleAuthorized }
+    var lastChecked: Date? { lastAttempt ?? history.first?.date }
+    var nextCheck: Date? {
+        guard enabled, ready, let lastChecked else { return nil }
+        return lastChecked.addingTimeInterval(300)
+    }
     var statusText: String {
         if working { return "Sincronizando" }
         if !ready { return "Configuração pendente" }
@@ -103,6 +111,13 @@ private final class BetaStore: ObservableObject {
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let mappings = object["mappings"] as? [String: Any] {
             mappingCount = mappings.count
+        }
+        if let data = try? Data(contentsOf: BetaPaths.plan),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let actions = object["actions"] as? [[String: Any]] {
+            ignoredCount = actions.filter {
+                ["unchanged", "skip"].contains($0["kind"] as? String ?? "")
+            }.count
         }
         let agents = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: agents.path)) ?? []
@@ -326,12 +341,19 @@ private final class BetaStore: ObservableObject {
             } else if line.hasPrefix("Summary: ") {
                 summary = String(line.dropFirst(9))
             } else if line.contains(" sync finished exit="), let date = started {
+                let counts = Dictionary(uniqueKeysWithValues: summary.split(separator: ",").compactMap { field -> (String, Int)? in
+                    let parts = field.trimmingCharacters(in: .whitespaces).split(separator: "=", maxSplits: 1)
+                    guard parts.count == 2, let value = Int(parts[1]) else { return nil }
+                    return (String(parts[0]), value)
+                })
                 runs.append(BetaRun(date: date, summary: summary.isEmpty ? "Sem alterações" : summary,
-                                    failed: !line.hasSuffix("exit=0")))
+                                    failed: !line.hasSuffix("exit=0"),
+                                    appleToGoogle: counts["create_google", default: 0] + counts["update_google", default: 0],
+                                    googleToApple: counts["update_apple", default: 0]))
                 started = nil
             }
         }
-        return Array(runs.suffix(30).reversed())
+        return Array(runs.suffix(400).reversed())
     }
 
     private static func readPreviewActions() -> [String] {
@@ -347,227 +369,11 @@ private final class BetaStore: ObservableObject {
     }
 }
 
-private struct BetaPanel: View {
-    @ObservedObject var store: BetaStore
-    @State private var confirmActivation = false
-    private let sidebar = Color(red: 0.11, green: 0.13, blue: 0.16)
-    private let canvas = Color(red: 0.965, green: 0.974, blue: 0.978)
-
-    var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Reminders Sync").font(.system(size: 14, weight: .semibold))
-                    Text("BETA · Apple ↔ Google").font(.system(size: 10)).foregroundStyle(.white.opacity(0.58))
-                }
-                .padding(.horizontal, 18).padding(.top, 25).padding(.bottom, 28)
-                ForEach(BetaStore.Page.allCases, id: \.self) { page in
-                    Button { store.page = page } label: {
-                        Label(page.rawValue, systemImage: page.icon)
-                            .font(.system(size: 12, weight: store.page == page ? .semibold : .regular))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12).frame(height: 36)
-                            .background(store.page == page ? Color.white.opacity(0.13) : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain).padding(.horizontal, 10)
-                }
-                Spacer()
-                HStack(spacing: 7) {
-                    Circle().fill(store.enabled && store.ready ? .green : .orange).frame(width: 7, height: 7)
-                    Text(store.statusText).font(.system(size: 10)).lineLimit(1)
-                }
-                .padding(.horizontal, 18).padding(.bottom, 16)
-                Button { NSApplication.shared.terminate(nil) } label: {
-                    Label("Encerrar aplicativo", systemImage: "power")
-                        .font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain).padding(18)
-            }
-            .foregroundStyle(.white).frame(width: 172).background(sidebar)
-
-            VStack(alignment: .leading, spacing: 0) {
-                switch store.page {
-                case .overview: overview
-                case .accounts: accounts
-                case .history: history
-                case .settings: settings
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(canvas)
-        }
-        .frame(width: 690, height: 500)
-        .preferredColorScheme(.light)
-        .onAppear { store.refresh() }
-        .alert("Ativar sincronização?", isPresented: $confirmActivation) {
-            Button("Ativar e aplicar") { store.activate() }
-            Button("Cancelar", role: .cancel) { }
-        } message: {
-            Text("As ações da prévia poderão criar ou atualizar tarefas no Google Tasks e no Apple Lembretes. Revise a lista antes de continuar.")
-        }
-    }
-
-    private func title(_ headline: String, _ subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(headline).font(.system(size: 21, weight: .semibold))
-            Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-        }
-        .padding(.bottom, 24)
-    }
-
-    private var overview: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            title("Visão geral", "O aplicativo executa a sincronização enquanto estiver aberto na barra de menus.")
-            HStack(spacing: 12) {
-                Image(systemName: store.enabled && store.ready ? "checkmark.circle" : "pause.circle")
-                    .font(.system(size: 25)).foregroundStyle(store.enabled && store.ready ? .green : .orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(store.statusText).font(.system(size: 15, weight: .semibold))
-                    Text("\(store.mappingCount) tarefas ligadas · verificação a cada 5 minutos")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(17).background(.white).clipShape(RoundedRectangle(cornerRadius: 12))
-            if !store.ready {
-                Text("Configure Apple Lembretes e Google Tasks na aba Contas antes de iniciar.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Button("Abrir Contas") { store.page = .accounts }
-            } else {
-                if store.legacyInstallationPresent {
-                    Text("O sincronizador anterior foi detectado neste Mac. A beta não pode ser ativada até migrarmos o estado e desligarmos o serviço antigo.")
-                        .font(.system(size: 11)).foregroundStyle(.orange)
-                }
-                Text("Primeira ativação: faça uma prévia sem alterações e confira o plano.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                HStack {
-                    Button("Calcular prévia") { store.preview() }.disabled(store.working)
-                    if store.previewReady && !store.enabled {
-                        Button("Ativar sincronização") { confirmActivation = true }
-                            .disabled(store.working || store.legacyInstallationPresent)
-                            .buttonStyle(.borderedProminent)
-                    }
-                    if store.enabled {
-                        Button("Sincronizar agora") { store.syncNow() }.disabled(store.working)
-                        Button("Pausar") { store.pause() }
-                    }
-                }
-                if !store.previewSummary.isEmpty {
-                    Text(store.previewSummary).font(.system(size: 11, design: .monospaced))
-                        .padding(10).background(.white).clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                if store.previewReady {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 5) {
-                            ForEach(store.previewActions.indices, id: \.self) { index in
-                                Text(store.previewActions[index]).font(.system(size: 10.5)).frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            if store.previewActions.isEmpty {
-                                Text("Nenhuma alteração planejada.").font(.system(size: 10.5)).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: 110)
-                }
-            }
-            if !store.notice.isEmpty { Text(store.notice).font(.system(size: 11)).foregroundStyle(.secondary) }
-            Spacer()
-        }
-        .padding(24)
-    }
-
-    private var accounts: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            title("Contas", "Cada pessoa usa seu próprio projeto Google Cloud; nenhum JSON é compartilhado.")
-            accountCard("Apple Lembretes", detail: store.appleAuthorized ? "Acesso concedido" : "Permissão necessária", icon: "checklist") {
-                Button(store.appleAuthorized ? "Verificar" : "Autorizar") { store.requestAppleAccess() }
-            }
-            accountCard("Cliente OAuth do Google", detail: store.hasClient ? "JSON importado neste Mac" : "Crie um cliente do tipo Aplicativo para computador", icon: "key.horizontal") {
-                Button("Importar JSON") { store.importGoogleClient() }
-            }
-            accountCard("Google Tasks", detail: store.hasToken ? "Conta conectada" : "Conecte sua conta pessoal no Safari", icon: "checkmark.circle") {
-                Button(store.hasToken ? "Verificar" : "Conectar") { store.connectGoogle() }
-                    .disabled(!store.hasClient || store.working)
-            }
-            Text("No Google Cloud: ative a Tasks API, configure a tela de consentimento, crie um cliente OAuth para computador e baixe o JSON. Adicione seu e-mail como testador se o projeto estiver em modo Teste.")
-                .font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if !store.notice.isEmpty { Text(store.notice).font(.system(size: 11)).foregroundStyle(.secondary) }
-            Spacer()
-        }
-        .padding(24)
-    }
-
-    private func accountCard<Actions: View>(_ name: String, detail: String, icon: String, @ViewBuilder actions: () -> Actions) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).font(.system(size: 18)).frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(name).font(.system(size: 12, weight: .semibold))
-                Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
-            }
-            Spacer()
-            actions()
-        }
-        .padding(14).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var history: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            title("Histórico", "Últimas execuções desta instalação")
-            if store.history.isEmpty {
-                Text("Nenhuma sincronização executada ainda.")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Spacer()
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(store.history) { run in
-                            HStack(alignment: .top, spacing: 10) {
-                                Circle().fill(run.failed ? .red : .green).frame(width: 7, height: 7).padding(.top, 5)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(run.failed ? "Execução com erro" : "Sincronização concluída")
-                                        .font(.system(size: 12, weight: .semibold))
-                                    Text(run.summary).font(.system(size: 10.5)).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(run.date, style: .time).font(.system(size: 10)).foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 12)
-                            Divider()
-                        }
-                    }
-                }
-            }
-        }
-        .padding(24)
-    }
-
-    private var settings: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            title("Ajustes", "Controle quando o Reminders Sync funciona.")
-            Toggle("Abrir ao iniciar sessão no Mac", isOn: Binding(
-                get: { store.launchAtLogin }, set: { store.setLaunchAtLogin($0) }
-            ))
-            .font(.system(size: 12))
-            Divider()
-            Text("Fechar o painel mantém o aplicativo na barra de menus. Encerrar o aplicativo interrompe as verificações automáticas. Seus dados e histórico ficam neste Mac.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if store.ready && !store.enabled {
-                Button("Retomar sincronização") { store.resume() }
-            }
-            if !store.notice.isEmpty { Text(store.notice).font(.system(size: 11)).foregroundStyle(.secondary) }
-            Spacer()
-        }
-        .padding(24)
-    }
-}
-
 @MainActor
 final class BetaAppDelegate: NSObject, NSApplicationDelegate {
     private let store = BetaStore()
     private var item: NSStatusItem?
-    private var panel: NSPopover?
+    private var window: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -577,11 +383,21 @@ final class BetaAppDelegate: NSObject, NSApplicationDelegate {
         status.button?.target = self
         status.button?.action = #selector(toggle)
         item = status
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.contentSize = NSSize(width: 690, height: 500)
-        popover.contentViewController = NSHostingController(rootView: BetaPanel(store: store))
-        panel = popover
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1020, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Reminders Sync Beta"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 960, height: 620)
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.contentView = NSHostingView(rootView: BetaPanel(store: store))
+        self.window = window
         DispatchQueue.main.async { self.show() }
     }
 
@@ -591,14 +407,14 @@ final class BetaAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggle() {
-        if panel?.isShown == true { panel?.performClose(nil) }
-        else { show() }
+        show()
     }
 
     private func show() {
-        guard let button = item?.button, let panel else { return }
+        guard let window else { return }
         store.refresh()
-        if !panel.isShown { panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 

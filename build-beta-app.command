@@ -34,7 +34,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 xcrun swiftc -swift-version 5 -parse-as-library -O \
   -framework SwiftUI -framework AppKit -framework EventKit -framework ServiceManagement \
-  "$SOURCE_DIR/macos/BetaApp.swift" -o "$APP/Contents/MacOS/RemindersSyncBeta"
+  "$SOURCE_DIR/macos/BetaApp.swift" "$SOURCE_DIR/macos/BetaDashboard.swift" -o "$APP/Contents/MacOS/RemindersSyncBeta"
 install -m 755 "$BUILD_DIR/engine/RemindersSyncBridge" "$APP/Contents/Resources/RemindersSyncBridge"
 install -m 755 "$REMINDCTL_BIN" "$APP/Contents/Resources/remindctl"
 install -m 644 "$SOURCE_DIR/macos/RemindctlLicense.txt" "$APP/Contents/Resources/RemindctlLicense.txt"
