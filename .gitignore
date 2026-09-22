@@ -10,3 +10,4 @@ build/
 *.log
 *.plist
 !launchd.plist.template
+!macos/Info.plist
