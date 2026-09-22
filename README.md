@@ -2,6 +2,18 @@
 
 Ponte local bidirecional, segura por padrão. A execução normal é uma simulação (`dry-run`); qualquer gravação exige explicitamente `--apply --confirm APPLY`.
 
+## Painel local
+
+O painel abre em [http://127.0.0.1:8765](http://127.0.0.1:8765) e permite:
+
+- conferir se o serviço está funcionando;
+- ver a última e a próxima execução;
+- consultar o histórico recente e mensagens de erro;
+- pausar e retomar a sincronização sem fechar o painel;
+- solicitar uma sincronização imediata.
+
+Ele aceita conexões somente do próprio Mac. Os comandos usam um token local com permissão `600`, e nenhuma credencial do Google é enviada ao navegador.
+
 ## Proteções
 
 - Tarefas Google sem a marca `[apple-reminders-bridge:v2]` nunca são alteradas nem copiadas para o Apple.
@@ -68,7 +80,7 @@ BRIDGE_STATE=/caminho/state.json \
 ./install.command
 ```
 
-O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra um agente do usuário e inicia a primeira sincronização.
+O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra agentes separados para a sincronização e para o painel, inicia a primeira sincronização e abre o painel no Safari.
 
 Para alterar o intervalo, edite `StartInterval` no template antes da instalação. O valor é expresso em segundos.
 
