@@ -4,13 +4,26 @@ Ponte local bidirecional, segura por padrão. A execução normal é uma simula�
 
 ## Proteções
 
-- Tarefas Google sem a marca `[apple-reminders-bridge:v1]` nunca são alteradas nem copiadas para o Apple.
+- Tarefas Google sem a marca `[apple-reminders-bridge:v2]` nunca são alteradas nem copiadas para o Apple.
+- Tarefas antigas com a marca `v1` são migradas no lugar, sem criar duplicatas.
 - A associação usa o UUID do Apple Lembretes, não o título.
 - Exclusões não são propagadas automaticamente.
 - O estado e as credenciais locais recebem permissão `600`.
 - Lembretes com horário preservam a hora original nas notas. O Google Tasks mantém apenas a data.
 - Conclusão e reabertura são propagadas nos dois sentidos.
 - Se Apple e Google mudarem antes da próxima execução, a alteração mais recente vence.
+
+## Lembretes recorrentes
+
+O Apple Lembretes é a fonte da regra de recorrência. Como a API do Google Tasks não oferece um campo de recorrência, a ponte representa cada ocorrência como uma tarefa Google separada:
+
+- ao concluir a ocorrência no Apple, a tarefa Google correspondente é concluída e a próxima ocorrência aberta pelo Apple vira uma nova tarefa Google;
+- ao concluir a ocorrência atual no Google, a mesma ocorrência é concluída no Apple; o Apple gera a seguinte e ela aparece no Google na próxima sincronização;
+- ocorrências Google concluídas permanecem no histórico;
+- ocorrências antigas do Apple que nunca foram sincronizadas não são importadas retroativamente;
+- alterações de título, data e horário da ocorrência atual continuam bidirecionais. O horário fica preservado nas notas porque a API do Google Tasks aceita apenas a data.
+
+A associação de uma série usa a lista e a data de criação fornecidas pelo EventKit. Cada ocorrência continua usando seu próprio UUID do Apple, evitando confundir tarefas iguais ou criar cópias ao atualizar uma data.
 
 ## Simulação
 
@@ -65,7 +78,7 @@ Para alterar o intervalo, edite `StartInterval` no template antes da instalaçã
 python test_bridge.py -v
 ```
 
-Os testes cobrem criação, conclusão e reabertura nos dois sentidos, inicialização sem duplicatas e resolução de alterações concorrentes.
+Os testes cobrem criação, conclusão e reabertura nos dois sentidos, migração sem duplicatas, resolução de alterações concorrentes e avanço de ocorrências diárias.
 
 ## Privacidade
 

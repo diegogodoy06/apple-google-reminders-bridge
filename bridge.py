@@ -9,6 +9,7 @@ into Apple Reminders. Deletions are intentionally not synchronized.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -27,8 +28,10 @@ from googleapiclient.discovery import build
 
 
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
-MARKER = "[apple-reminders-bridge:v1]"
+LEGACY_MARKER = "[apple-reminders-bridge:v1]"
+MARKER = "[apple-reminders-bridge:v2]"
 APPLE_ID_RE = re.compile(r"^apple_reminder_id: ([^\n]+)$", re.MULTILINE)
+APPLE_SERIES_ID_RE = re.compile(r"^apple_series_id: ([^\n]+)$", re.MULTILINE)
 
 
 @dataclass
@@ -41,6 +44,8 @@ class Action:
     google_task_id: str | None = None
     due_date: str | None = None
     original_time: str | None = None
+    series_id: str | None = None
+    recurrence: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,9 +114,9 @@ def write_private_json(path: Path, value: Any) -> None:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"version": 2, "mappings": {}}
+        return {"version": 3, "mappings": {}}
     state = json.loads(path.read_text(encoding="utf-8"))
-    state.setdefault("version", 2)
+    state.setdefault("version", 3)
     state.setdefault("mappings", {})
     return state
 
@@ -140,9 +145,24 @@ def list_google_tasks(service, tasklist_id: str) -> list[dict[str, Any]]:
 
 def parse_google_bridge_id(task: dict[str, Any]) -> str | None:
     notes = task.get("notes") or ""
-    if MARKER not in notes:
+    if MARKER not in notes and LEGACY_MARKER not in notes:
         return None
     match = APPLE_ID_RE.search(notes)
+    return match.group(1).strip() if match else None
+
+
+def google_marker_version(task: dict[str, Any]) -> int:
+    notes = task.get("notes") or ""
+    if MARKER in notes:
+        return 2
+    if LEGACY_MARKER in notes:
+        return 1
+    return 0
+
+
+def parse_google_series_id(task: dict[str, Any]) -> str | None:
+    notes = task.get("notes") or ""
+    match = APPLE_SERIES_ID_RE.search(notes)
     return match.group(1).strip() if match else None
 
 
@@ -168,7 +188,71 @@ def parse_timestamp(value: str | None) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def apple_snapshot(reminder: dict[str, Any], zone: ZoneInfo) -> dict[str, Any]:
+def recurrence_signature(reminder: dict[str, Any]) -> str | None:
+    creation_date = reminder.get("creationDate")
+    list_id = reminder.get("listID")
+    if not creation_date or not list_id:
+        return None
+    return f"{list_id}\0{creation_date}"
+
+
+def recurrence_catalog(reminders: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Map every occurrence in a series to the rule carried by its open occurrence.
+
+    EventKit gives each completed occurrence a new reminder ID and only exposes the
+    recurrence rule on the current open occurrence. Its list and creation timestamp
+    stay stable, which lets us recognize completed occurrences without using titles.
+    """
+    catalog: dict[str, dict[str, Any]] = {}
+    for reminder in reminders:
+        rule = reminder.get("recurrenceRule")
+        signature = recurrence_signature(reminder)
+        if signature and isinstance(rule, dict) and rule.get("frequency"):
+            catalog[signature] = rule
+    return catalog
+
+
+def recurrence_rule_for(
+    reminder: dict[str, Any], catalog: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    rule = reminder.get("recurrenceRule")
+    if isinstance(rule, dict) and rule.get("frequency"):
+        return rule
+    signature = recurrence_signature(reminder)
+    return catalog.get(signature) if catalog and signature else None
+
+
+def recurrence_series_id(
+    reminder: dict[str, Any], catalog: dict[str, dict[str, Any]] | None = None
+) -> str | None:
+    if not recurrence_rule_for(reminder, catalog):
+        return None
+    signature = recurrence_signature(reminder)
+    if not signature:
+        return None
+    return hashlib.sha256(signature.encode("utf-8")).hexdigest()[:24]
+
+
+def recurrence_text(rule: dict[str, Any] | None) -> str | None:
+    if not rule:
+        return None
+    frequency = str(rule.get("frequency", "")).lower()
+    interval = int(rule.get("interval") or 1)
+    names = {
+        "daily": ("diária", "dias"),
+        "weekly": ("semanal", "semanas"),
+        "monthly": ("mensal", "meses"),
+        "yearly": ("anual", "anos"),
+    }
+    singular, plural = names.get(frequency, (frequency or "desconhecida", frequency))
+    return singular if interval == 1 else f"a cada {interval} {plural}"
+
+
+def apple_snapshot(
+    reminder: dict[str, Any],
+    zone: ZoneInfo,
+    catalog: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     due = reminder.get("dueDate")
     due_date = None
     original_time = None
@@ -177,6 +261,7 @@ def apple_snapshot(reminder: dict[str, Any], zone: ZoneInfo) -> dict[str, Any]:
         due_date = local_due.date().isoformat()
         if not reminder.get("dueDateIsAllDay"):
             original_time = local_due.strftime("%H:%M")
+    rule = recurrence_rule_for(reminder, catalog)
     return {
         "title": reminder.get("title", ""),
         "completed": bool(reminder.get("isCompleted")),
@@ -185,6 +270,8 @@ def apple_snapshot(reminder: dict[str, Any], zone: ZoneInfo) -> dict[str, Any]:
         "all_day": bool(reminder.get("dueDateIsAllDay")),
         "list_name": reminder.get("listName", ""),
         "priority": reminder.get("priority", "none"),
+        "recurrence": rule,
+        "series_id": recurrence_series_id(reminder, catalog),
     }
 
 
@@ -205,21 +292,33 @@ def equivalent_core(apple: dict[str, Any], google: dict[str, Any]) -> bool:
     )
 
 
-def desired_google_task(reminder: dict[str, Any], zone: ZoneInfo) -> dict[str, Any]:
-    snapshot = apple_snapshot(reminder, zone)
+def desired_google_task(
+    reminder: dict[str, Any],
+    zone: ZoneInfo,
+    catalog: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    snapshot = apple_snapshot(reminder, zone, catalog)
     time_text = snapshot["original_time"] or "dia inteiro"
-    notes = "\n".join(
+    note_lines = [
+        "Sincronizado do Apple Lembretes.",
+        f"Lista Apple: {snapshot['list_name']}",
+        f"Horário original: {time_text} ({zone.key})",
+        f"Prioridade Apple: {snapshot['priority']}",
+    ]
+    recurrence = recurrence_text(snapshot["recurrence"])
+    if recurrence:
+        note_lines.append(f"Recorrência Apple: {recurrence}")
+    note_lines.extend(
         [
-            "Sincronizado do Apple Lembretes.",
-            f"Lista Apple: {snapshot['list_name']}",
-            f"Horário original: {time_text} ({zone.key})",
-            f"Prioridade Apple: {snapshot['priority']}",
             "",
             MARKER,
             f"apple_reminder_id: {reminder['id']}",
-            f"apple_last_modified: {reminder.get('lastModifiedDate', '')}",
         ]
     )
+    if snapshot["series_id"]:
+        note_lines.append(f"apple_series_id: {snapshot['series_id']}")
+    note_lines.append(f"apple_last_modified: {reminder.get('lastModifiedDate', '')}")
+    notes = "\n".join(note_lines)
     body: dict[str, Any] = {
         "title": snapshot["title"],
         "notes": notes,
@@ -247,6 +346,7 @@ def build_plan(
     reminder_by_id: dict[str, dict[str, Any]] = {}
     desired_by_id: dict[str, dict[str, Any]] = {}
     mappings = state.get("mappings", {})
+    recurrence_rules = recurrence_catalog(reminders)
 
     for reminder in reminders:
         apple_id = reminder.get("id")
@@ -255,8 +355,8 @@ def build_plan(
             actions.append(Action("skip", "none", "", title, "missing-apple-id"))
             continue
         reminder_by_id[apple_id] = reminder
-        apple = apple_snapshot(reminder, zone)
-        desired_by_id[apple_id] = desired_google_task(reminder, zone)
+        apple = apple_snapshot(reminder, zone, recurrence_rules)
+        desired_by_id[apple_id] = desired_google_task(reminder, zone, recurrence_rules)
         due = apple["due_date"]
         current_google = google_by_apple_id.get(apple_id)
 
@@ -268,7 +368,17 @@ def build_plan(
                 actions.append(Action("skip", "none", apple_id, title, "completed-without-mapping"))
             else:
                 actions.append(
-                    Action("create_google", "apple-to-google", apple_id, title, "not-yet-synced", due_date=due, original_time=apple["original_time"])
+                    Action(
+                        "create_google",
+                        "apple-to-google",
+                        apple_id,
+                        title,
+                        "new-recurrence-occurrence" if apple["recurrence"] else "not-yet-synced",
+                        due_date=due,
+                        original_time=apple["original_time"],
+                        series_id=apple["series_id"],
+                        recurrence=recurrence_text(apple["recurrence"]),
+                    )
                 )
             continue
 
@@ -278,11 +388,12 @@ def build_plan(
         previous_google = previous.get("google_snapshot")
         apple_changed = previous_apple is not None and apple != previous_apple
         google_changed = previous_google is not None and google != previous_google
+        needs_marker_upgrade = google_marker_version(current_google) < 2
 
         if previous_apple is None or previous_google is None:
             if equivalent_core(apple, google):
-                chosen = "unchanged"
-                reason = "bootstrap-equivalent"
+                chosen = "update_google" if needs_marker_upgrade else "unchanged"
+                reason = "bridge-metadata-upgrade" if needs_marker_upgrade else "bootstrap-equivalent"
             elif direction == "apple-to-google":
                 chosen = "update_google"
                 reason = "bootstrap-apple-authoritative"
@@ -315,8 +426,8 @@ def build_plan(
                 chosen = "conflict"
                 reason = "both-changed-same-timestamp"
         elif equivalent_core(apple, google):
-            chosen = "unchanged"
-            reason = "already-synchronized"
+            chosen = "update_google" if needs_marker_upgrade else "unchanged"
+            reason = "bridge-metadata-upgrade" if needs_marker_upgrade else "already-synchronized"
         else:
             chosen = "conflict"
             reason = "state-diverged-without-detected-change"
@@ -331,6 +442,8 @@ def build_plan(
                 google_task_id=current_google.get("id"),
                 due_date=due,
                 original_time=apple["original_time"],
+                series_id=apple["series_id"],
+                recurrence=recurrence_text(apple["recurrence"]),
             )
         )
     return actions, reminder_by_id, desired_by_id
@@ -387,6 +500,7 @@ def write_current_state(
 ) -> None:
     google_by_apple_id, conflicts = index_bridge_tasks(google_tasks)
     reminder_by_id = {item.get("id"): item for item in reminders if item.get("id")}
+    recurrence_rules = recurrence_catalog(reminders)
     mappings: dict[str, Any] = {}
     for apple_id, google_task in google_by_apple_id.items():
         reminder = reminder_by_id.get(apple_id)
@@ -394,11 +508,12 @@ def write_current_state(
             continue
         mappings[apple_id] = {
             "google_task_id": google_task["id"],
-            "apple_snapshot": apple_snapshot(reminder, zone),
+            "apple_snapshot": apple_snapshot(reminder, zone, recurrence_rules),
             "google_snapshot": google_snapshot(google_task),
+            "series_id": recurrence_series_id(reminder, recurrence_rules),
             "last_sync": datetime.now(timezone.utc).isoformat(),
         }
-    write_private_json(state_path, {"version": 2, "mappings": mappings})
+    write_private_json(state_path, {"version": 3, "mappings": mappings})
 
 
 def apply_plan(
