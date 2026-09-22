@@ -5,23 +5,25 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>pt_BR</string>
   <key>CFBundleDisplayName</key>
-  <string>Ponte de Lembretes</string>
+  <string>Reminders Sync</string>
   <key>CFBundleExecutable</key>
-  <string>PonteDeLembretes</string>
+  <string>RemindersSync</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.local.ponte-de-lembretes</string>
+  <string>com.local.reminders-sync</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Ponte de Lembretes</string>
+  <string>Reminders Sync</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0.0</string>
+  <string>1.1.0</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
+  <key>LSUIElement</key>
+  <true/>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>

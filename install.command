@@ -60,7 +60,7 @@ launchctl kickstart -k "gui/$user_id/$LABEL"
 
 echo
 echo "Instalação concluída. A sincronização rodará a cada 5 minutos."
-echo "Aplicativo: $HOME/Applications/Ponte de Lembretes.app"
+echo "Aplicativo: $HOME/Applications/Reminders Sync.app (barra de menus)"
 echo "Logs: $INSTALL_DIR/runtime/sync.log"
 echo
 read "?Pressione Enter para fechar esta janela..."

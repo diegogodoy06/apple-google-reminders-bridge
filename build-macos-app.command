@@ -2,13 +2,15 @@
 set -euo pipefail
 
 SOURCE_DIR="${0:A:h}"
-APP_NAME="Ponte de Lembretes"
-EXECUTABLE_NAME="PonteDeLembretes"
+APP_NAME="Reminders Sync"
+EXECUTABLE_NAME="RemindersSync"
 BUILD_DIR="${BRIDGE_APP_BUILD_DIR:-$SOURCE_DIR/build/macos}"
 INSTALL_ROOT="${BRIDGE_APP_INSTALL_ROOT:-$HOME/Applications}"
 APP_PATH="$INSTALL_ROOT/$APP_NAME.app"
 STAGING_APP="$BUILD_DIR/$APP_NAME.app"
 ICONSET="$BUILD_DIR/AppIcon.iconset"
+LOGIN_PLIST="$HOME/Library/LaunchAgents/com.local.reminders-sync-menu.plist"
+LOGIN_TARGET="gui/$(id -u)/com.local.reminders-sync-menu"
 
 rm -rf "$STAGING_APP" "$ICONSET"
 mkdir -p "$STAGING_APP/Contents/MacOS" "$STAGING_APP/Contents/Resources" "$ICONSET" "$INSTALL_ROOT"
@@ -38,9 +40,37 @@ install -m 644 "$SOURCE_DIR/macos/Info.plist" "$STAGING_APP/Contents/Info.plist"
 codesign --force --deep --sign - "$STAGING_APP" >/dev/null
 
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
+pkill -x Nexo >/dev/null 2>&1 || true
+pkill -x PonteDeLembretes >/dev/null 2>&1 || true
 rm -rf "$APP_PATH"
 ditto "$STAGING_APP" "$APP_PATH"
 touch "$APP_PATH"
-open "$APP_PATH"
+codesign --verify --deep --strict "$APP_PATH"
+
+mkdir -p "$HOME/Library/LaunchAgents"
+for OLD_APP_NAME in "Nexo" "Ponte de Lembretes"; do
+  OLD_APP_PATH="$INSTALL_ROOT/$OLD_APP_NAME.app"
+  if [[ -d "$OLD_APP_PATH" ]]; then
+    mkdir -p "$HOME/.Trash"
+    OLD_TRASH_PATH="$HOME/.Trash/$OLD_APP_NAME-$(date +%Y%m%d-%H%M%S).app"
+    mv "$OLD_APP_PATH" "$OLD_TRASH_PATH"
+    echo "Versão antiga movida para a Lixeira: $OLD_TRASH_PATH"
+  fi
+done
+OLD_LOGIN_PLIST="$HOME/Library/LaunchAgents/com.local.nexo-menu.plist"
+if [[ -f "$OLD_LOGIN_PLIST" ]]; then
+  launchctl bootout "gui/$(id -u)/com.local.nexo-menu" >/dev/null 2>&1 || true
+  launchctl disable "gui/$(id -u)/com.local.nexo-menu"
+  mkdir -p "$HOME/.Trash"
+  mv "$OLD_LOGIN_PLIST" "$HOME/.Trash/com.local.nexo-menu-$(date +%Y%m%d-%H%M%S).plist"
+fi
+
+sed "s|__APP_PATH__|$APP_PATH|g" "$SOURCE_DIR/macos/RemindersSyncLoginAgent.plist.template" > "$LOGIN_PLIST"
+chmod 600 "$LOGIN_PLIST"
+plutil -lint "$LOGIN_PLIST"
+launchctl bootout "$LOGIN_TARGET" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$LOGIN_PLIST"
+launchctl enable "$LOGIN_TARGET"
+launchctl kickstart -k "$LOGIN_TARGET"
 
 echo "Aplicativo instalado em: $APP_PATH"

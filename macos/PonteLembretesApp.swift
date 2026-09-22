@@ -211,7 +211,7 @@ enum BridgeReader {
     }
 
     static func parseHistory(limit: Int = 40) -> [SyncRun] {
-        guard let content = try? String(contentsOf: BridgeFiles.syncLog, encoding: .utf8) else { return [] }
+        guard let content = tail(BridgeFiles.syncLog, bytes: 256_000) else { return [] }
         let startRegex = try? NSRegularExpression(pattern: #"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) sync started$"#)
         let finishRegex = try? NSRegularExpression(pattern: #"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) sync finished exit=(\d+)$"#)
         let actionRegex = try? NSRegularExpression(pattern: #"^\d+\. ([A-Z_]+) \[[^]]+\]: (.*) \(due=.*; [^)]+\)$"#)
@@ -277,6 +277,21 @@ enum BridgeReader {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return content.split(separator: "\n").suffix(lines).joined(separator: "\n")
     }
+
+    private static func tail(_ url: URL, bytes: UInt64) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        let start = size > bytes ? size - bytes : 0
+        try? handle.seek(toOffset: start)
+        guard let data = try? handle.readToEnd(), var text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        if start > 0, let firstNewline = text.firstIndex(of: "\n") {
+            text = String(text[text.index(after: firstNewline)...])
+        }
+        return text
+    }
 }
 
 enum BridgeController {
@@ -330,7 +345,7 @@ final class BridgeMonitor: ObservableObject {
 
     init() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
@@ -392,36 +407,52 @@ final class BridgeMonitor: ObservableObject {
     }
 }
 
-struct StatusDot: View {
-    let state: ServiceState
-    var body: some View {
-        Circle()
-            .fill(state.color)
-            .frame(width: 10, height: 10)
-            .overlay(Circle().stroke(state.color.opacity(0.16), lineWidth: 7))
-            .accessibilityHidden(true)
+private enum AppStyle {
+    static let ink = Color(red: 0.12, green: 0.15, blue: 0.18)
+    static let sidebar = Color(red: 0.11, green: 0.13, blue: 0.16)
+    static let canvas = Color(red: 0.965, green: 0.974, blue: 0.978)
+    static let accent = Color(red: 0.10, green: 0.45, blue: 0.42)
+}
+
+private enum PanelPage: String, CaseIterable {
+    case overview = "Visão geral"
+    case history = "Histórico"
+    case about = "Sobre"
+
+    var symbol: String {
+        switch self {
+        case .overview: return "square.grid.2x2"
+        case .history: return "clock.arrow.circlepath"
+        case .about: return "info.circle"
+        }
     }
 }
 
-struct MetricView: View {
-    let label: String
-    let value: String
-    let detail: String
+struct RemindersSyncGlyph: View {
+    var monochrome = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+        ZStack {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(monochrome ? Color.primary : Color.white, lineWidth: 1.7)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(monochrome ? Color.primary : Color.white)
+                .frame(height: 3)
+                .offset(y: -4.5)
+            HStack(spacing: 2) {
+                Circle().fill(monochrome ? Color.primary : Color.white).frame(width: 2.5, height: 2.5)
+                Capsule().fill(monochrome ? Color.primary : Color.white).frame(width: 7, height: 2)
+            }
+            .offset(y: 3)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 18)
+        .frame(width: 17, height: 16)
+        .accessibilityLabel("Reminders Sync")
     }
 }
 
 struct RunRow: View {
     let run: SyncRun
+
     private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "pt_BR")
@@ -430,32 +461,34 @@ struct RunRow: View {
     }()
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Text(Self.formatter.string(from: run.startedAt))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 92, alignment: .leading)
+        HStack(alignment: .top, spacing: 11) {
             Circle()
-                .fill(run.failed ? Color.red : run.isRunning ? Color.orange : Color(red: 0.075, green: 0.475, blue: 0.357))
+                .fill(run.failed ? Color.red : run.isRunning ? Color.orange : AppStyle.accent)
                 .frame(width: 7, height: 7)
                 .padding(.top, 5)
             VStack(alignment: .leading, spacing: 3) {
-                Text(run.title).font(.subheadline.weight(.semibold))
-                Text(run.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(run.title).font(.system(size: 12.5, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Text(Self.formatter.string(from: run.startedAt))
+                        .font(.system(size: 10, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                Text(run.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
-            Spacer(minLength: 12)
-            Text(run.isRunning ? "agora" : run.changedCount == 0 ? "sem alterações" : "\(run.changedCount) alteração\(run.changedCount == 1 ? "" : "ões")")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
+        .padding(.vertical, 10)
     }
 }
 
-struct ContentView: View {
+struct RemindersSyncPopover: View {
     @EnvironmentObject private var monitor: BridgeMonitor
-    @State private var confirmPause = false
+    @State private var page: PanelPage = .overview
+    @State private var historyQuery = ""
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -464,197 +497,352 @@ struct ContentView: View {
         return formatter
     }()
 
+    private var filteredHistory: [SyncRun] {
+        let query = historyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return monitor.snapshot.history }
+        return monitor.snapshot.history.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+                || $0.detail.localizedCaseInsensitiveContains(query)
+                || $0.actions.contains { $0.title.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            metrics
-            Divider()
-            history
-        }
-        .frame(minWidth: 760, minHeight: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .bottomTrailing) { messageOverlay }
-        .confirmationDialog(
-            "Pausar a sincronização automática?",
-            isPresented: $confirmPause,
-            titleVisibility: .visible
-        ) {
-            Button("Pausar", role: .destructive) { monitor.pauseOrResume() }
-            Button("Cancelar", role: .cancel) {}
-        } message: {
-            Text("O aplicativo continuará aberto, mas nenhuma tarefa será alterada até você retomar.")
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 18) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(red: 0.094, green: 0.129, blue: 0.169))
-                Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 46, height: 46)
-
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 10) {
-                    StatusDot(state: monitor.snapshot.state)
-                    Text(monitor.snapshot.state.title).font(.title3.weight(.semibold))
-                }
-                Text(monitor.snapshot.state.detail).font(.callout).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                monitor.syncNow()
-            } label: {
-                Label("Sincronizar agora", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(red: 0.094, green: 0.129, blue: 0.169))
-            .disabled(monitor.isWorking || monitor.snapshot.paused || !monitor.snapshot.loaded)
-
-            Button {
-                if monitor.snapshot.paused { monitor.pauseOrResume() } else { confirmPause = true }
-            } label: {
-                Label(monitor.snapshot.paused ? "Retomar" : "Pausar", systemImage: monitor.snapshot.paused ? "play.fill" : "pause.fill")
-            }
-            .buttonStyle(.bordered)
-            .disabled(monitor.isWorking || monitor.snapshot.state == .syncing)
-        }
-        .padding(24)
-    }
-
-    private var metrics: some View {
         HStack(spacing: 0) {
-            MetricView(
-                label: "Última execução",
-                value: monitor.snapshot.history.first.map { Self.timeFormatter.string(from: $0.startedAt) } ?? "—",
-                detail: monitor.snapshot.history.first?.title ?? "Nenhuma execução"
-            )
-            Divider().frame(height: 70)
-            MetricView(
-                label: "Próxima execução",
-                value: monitor.snapshot.paused ? "Pausada" : monitor.snapshot.nextRun.map { Self.timeFormatter.string(from: $0) } ?? "—",
-                detail: "A cada 5 minutos"
-            )
-            Divider().frame(height: 70)
-            MetricView(
-                label: "Tarefas ligadas",
-                value: "\(monitor.snapshot.mappingCount)",
-                detail: "\(monitor.snapshot.successfulRuns24h)/\(monitor.snapshot.totalRuns24h) execuções concluídas em 24h"
-            )
+            sidebar
+                .frame(width: 171)
+            Rectangle().fill(Color.black.opacity(0.12)).frame(width: 1)
+            VStack(spacing: 0) {
+                switch page {
+                case .overview: overview
+                case .history: history
+                case .about: about
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppStyle.canvas)
         }
+        .frame(width: 655, height: 468)
+        .preferredColorScheme(.light)
+        .onAppear { monitor.refresh() }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 11) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.10))
+                    RemindersSyncGlyph()
+                        .scaleEffect(1.2)
+                }
+                .frame(width: 34, height: 34)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Reminders Sync").font(.system(size: 12, weight: .bold, design: .rounded))
+                    Text("Lembretes em sintonia")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 17)
+            .padding(.top, 22)
+            .padding(.bottom, 32)
+
+            ForEach(PanelPage.allCases, id: \.self) { item in
+                Button { page = item } label: {
+                    HStack(spacing: 11) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 17)
+                        Text(item.rawValue).font(.system(size: 12, weight: page == item ? .semibold : .medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(page == item ? .white : .white.opacity(0.72))
+                    .padding(.horizontal, 12)
+                    .frame(height: 34)
+                    .background(page == item ? Color.white.opacity(0.13) : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+            }
+
+            Spacer()
+
+            HStack(spacing: 7) {
+                Circle().fill(monitor.snapshot.state.color).frame(width: 6, height: 6)
+                Text(monitor.snapshot.state.title)
+                    .lineLimit(1)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 15)
+
+            Rectangle().fill(.white.opacity(0.13)).frame(height: 1)
+
+            Button { NSApplication.shared.terminate(nil) } label: {
+                Label("Encerrar Reminders Sync", systemImage: "power")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 19)
+                    .frame(height: 45)
+            }
+            .buttonStyle(.plain)
+        }
+        .background(AppStyle.sidebar)
+    }
+
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            heading("Visão geral", subtitle: "Apple Lembretes  ↔  Google Tasks")
+
+            HStack(alignment: .top, spacing: 13) {
+                Image(systemName: monitor.snapshot.state.symbol)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(monitor.snapshot.state.color)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(monitor.snapshot.state.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(AppStyle.ink)
+                    Text(monitor.snapshot.state.detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(monitor.snapshot.state.color.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(.horizontal, 23)
+            .padding(.top, 18)
+
+            HStack(spacing: 0) {
+                valueColumn("Última", value: monitor.snapshot.history.first.map { Self.timeFormatter.string(from: $0.startedAt) } ?? "—", detail: "execução")
+                Rectangle().fill(Color.black.opacity(0.08)).frame(width: 1, height: 47)
+                valueColumn("Próxima", value: monitor.snapshot.paused ? "Pausada" : monitor.snapshot.nextRun.map { Self.timeFormatter.string(from: $0) } ?? "—", detail: "em 5 minutos")
+                Rectangle().fill(Color.black.opacity(0.08)).frame(width: 1, height: 47)
+                valueColumn("Ligadas", value: "\(monitor.snapshot.mappingCount)", detail: "tarefas")
+            }
+            .padding(.vertical, 20)
+            .padding(.horizontal, 8)
+
+            Rectangle().fill(Color.black.opacity(0.08)).frame(height: 1).padding(.horizontal, 23)
+
+            HStack {
+                Text("Atividade recente").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Button("Ver histórico") { page = .history }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppStyle.accent)
+            }
+            .padding(.horizontal, 23)
+            .padding(.top, 17)
+
+            VStack(spacing: 0) {
+                if monitor.snapshot.history.isEmpty {
+                    emptyHistory
+                } else {
+                    ForEach(monitor.snapshot.history.prefix(2)) { run in
+                        RunRow(run: run)
+                        if run.id != monitor.snapshot.history.prefix(2).last?.id {
+                            Rectangle().fill(Color.black.opacity(0.06)).frame(height: 1)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 23)
+
+            Spacer(minLength: 0)
+            controls
+        }
+    }
+
+    private func valueColumn(_ label: String, value: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(AppStyle.ink)
+                .lineLimit(1)
+            Text(detail).font(.system(size: 9.5)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 15)
+    }
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let message = monitor.message {
+                Label(message, systemImage: monitor.messageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(monitor.messageIsError ? .red : AppStyle.accent)
+                    .lineLimit(2)
+            }
+            HStack(spacing: 9) {
+                Button { monitor.syncNow() } label: {
+                    Label("Sincronizar agora", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppStyle.accent)
+                .disabled(monitor.isWorking || monitor.snapshot.paused || !monitor.snapshot.loaded)
+
+                Button { monitor.pauseOrResume() } label: {
+                    Label(monitor.snapshot.paused ? "Retomar" : "Pausar", systemImage: monitor.snapshot.paused ? "play.fill" : "pause.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(monitor.isWorking || monitor.snapshot.state == .syncing)
+            }
+        }
+        .padding(.horizontal, 23)
+        .padding(.vertical, 17)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.75))
     }
 
     private var history: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("Histórico recente").font(.headline)
-                Spacer()
-                Text("\(monitor.snapshot.changes24h) alterações nas últimas 24h")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 8)
+            heading("Histórico", subtitle: "\(monitor.snapshot.successfulRuns24h) de \(monitor.snapshot.totalRuns24h) execuções concluídas nas últimas 24h")
+            TextField("Buscar no histórico", text: $historyQuery)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 23)
+                .padding(.top, 18)
+                .padding(.bottom, 9)
 
-            if monitor.snapshot.history.isEmpty {
-                ContentUnavailableView(
-                    "Sem histórico",
-                    systemImage: "clock",
-                    description: Text("As execuções aparecerão aqui depois da primeira sincronização.")
-                )
+            if filteredHistory.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 27, weight: .light))
+                        .foregroundStyle(.secondary)
+                    Text(historyQuery.isEmpty ? "Sem execuções ainda" : "Nenhum resultado")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(historyQuery.isEmpty ? "A primeira sincronização aparecerá aqui." : "Tente outro termo de busca.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(monitor.snapshot.history.prefix(30)) { run in
+                        ForEach(filteredHistory) { run in
                             RunRow(run: run)
-                            Divider().padding(.leading, 113)
+                            Rectangle().fill(Color.black.opacity(0.06)).frame(height: 1)
                         }
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 23)
                 }
             }
-
             if !monitor.snapshot.errorText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 DisclosureGroup("Mensagens de erro") {
-                    ScrollView(.horizontal) {
+                    ScrollView {
                         Text(monitor.snapshot.errorText)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(.system(size: 10, design: .monospaced))
                             .textSelection(.enabled)
-                            .padding(.top, 8)
                     }
+                    .frame(maxHeight: 90)
                 }
-                .padding(20)
+                .font(.system(size: 11, weight: .medium))
+                .padding(13)
                 .background(Color.red.opacity(0.05))
+                .padding(.horizontal, 23)
+                .padding(.bottom, 13)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder private var messageOverlay: some View {
-        if let message = monitor.message {
-            Label(message, systemImage: monitor.messageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.callout.weight(.medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .foregroundStyle(.white)
-                .background(monitor.messageIsError ? Color.red : Color(red: 0.094, green: 0.129, blue: 0.169))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .shadow(radius: 18, y: 8)
-                .padding(20)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+    private var about: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            heading("Sobre", subtitle: "Lembretes em sintonia")
+            HStack(spacing: 17) {
+                Image(nsImage: NSApplication.shared.applicationIconImage)
+                    .resizable()
+                    .frame(width: 62, height: 62)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Reminders Sync").font(.system(size: 20, weight: .semibold, design: .rounded))
+                    Text("Acompanhe a ligação entre seus lembretes e tarefas.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 23)
+            .padding(.top, 26)
+            .padding(.bottom, 22)
+
+            Rectangle().fill(Color.black.opacity(0.08)).frame(height: 1).padding(.horizontal, 23)
+            infoLine("Sincronização", value: "a cada 5 minutos")
+            infoLine("Tarefas ligadas", value: "\(monitor.snapshot.mappingCount)")
+            infoLine("Versão", value: "1.1")
+            Spacer()
+            Text("Os dados ficam no seu Mac. O serviço de sincronização funciona mesmo quando você encerra o aplicativo.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(23)
         }
     }
-}
 
-struct MenuBarView: View {
-    @EnvironmentObject private var monitor: BridgeMonitor
-    @Environment(\.openWindow) private var openWindow
+    private func infoLine(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).fontWeight(.medium)
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 23)
+        .padding(.vertical, 11)
+    }
 
-    var body: some View {
-        Text(monitor.snapshot.state.title).font(.headline)
-        Text("\(monitor.snapshot.mappingCount) tarefas ligadas").foregroundStyle(.secondary)
-        Divider()
-        Button("Abrir painel") {
-            openWindow(id: "main")
-            NSApplication.shared.activate(ignoringOtherApps: true)
+    private func heading(_ title: String, subtitle: String) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .tracking(-0.3)
+                    .foregroundStyle(AppStyle.ink)
+                Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { monitor.refresh() } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(AppStyle.ink)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("Atualizar estado")
         }
-        Button("Sincronizar agora") { monitor.syncNow() }
-            .disabled(monitor.snapshot.paused || monitor.isWorking || !monitor.snapshot.loaded)
-        Button(monitor.snapshot.paused ? "Retomar sincronização" : "Pausar sincronização") {
-            monitor.pauseOrResume()
-        }
-        Divider()
-        Button("Encerrar aplicativo") { NSApplication.shared.terminate(nil) }
+        .padding(.horizontal, 23)
+        .padding(.top, 23)
+    }
+
+    private var emptyHistory: some View {
+        Text("A primeira sincronização aparecerá aqui.")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 16)
     }
 }
 
 @main
-struct PonteLembretesApp: App {
+struct RemindersSyncApp: App {
     @StateObject private var monitor = BridgeMonitor()
 
     var body: some Scene {
-        WindowGroup("Ponte de Lembretes", id: "main") {
-            ContentView().environmentObject(monitor)
-        }
-        .defaultSize(width: 900, height: 650)
-        .commands {
-            CommandGroup(replacing: .newItem) {}
-            CommandMenu("Sincronização") {
-                Button("Sincronizar agora") { monitor.syncNow() }
-                    .keyboardShortcut("r", modifiers: [.command])
-                Button(monitor.snapshot.paused ? "Retomar" : "Pausar") { monitor.pauseOrResume() }
-            }
-        }
-
         MenuBarExtra {
-            MenuBarView().environmentObject(monitor)
+            RemindersSyncPopover().environmentObject(monitor)
         } label: {
-            Image(systemName: monitor.snapshot.state.symbol)
+            RemindersSyncGlyph(monochrome: true)
         }
+        .menuBarExtraStyle(.window)
     }
 }

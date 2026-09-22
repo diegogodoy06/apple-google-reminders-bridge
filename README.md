@@ -4,7 +4,7 @@ Ponte local bidirecional, segura por padrão. A execução normal é uma simula�
 
 ## Aplicativo para macOS
 
-`Ponte de Lembretes.app` é um aplicativo nativo em SwiftUI. Ele fica disponível no Finder, Spotlight, Dock e barra de menus e permite:
+`Reminders Sync.app` é um aplicativo nativo em SwiftUI que abre na barra de menus ao iniciar a sessão do macOS. Clique no símbolo de calendário e lista no alto da tela para abrir o painel. Ele permite:
 
 - conferir se o serviço está funcionando;
 - ver a última e a próxima execução;
@@ -12,7 +12,7 @@ Ponte local bidirecional, segura por padrão. A execução normal é uma simula�
 - pausar e retomar a sincronização sem fechar o painel;
 - solicitar uma sincronização imediata.
 
-O aplicativo lê apenas os arquivos locais de estado e histórico. Ele não abre portas de rede, não usa navegador e não recebe as credenciais do Google.
+O aplicativo fica fora do Dock. Ele lê apenas os arquivos locais de estado e histórico, não abre portas de rede, não usa navegador e não recebe as credenciais do Google. Encerrar o aplicativo pelo menu lateral não interrompe a sincronização em segundo plano.
 
 ## Proteções
 
@@ -80,7 +80,7 @@ BRIDGE_STATE=/caminho/state.json \
 ./install.command
 ```
 
-O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra o agente de sincronização, compila o aplicativo nativo e o instala em `~/Applications/Ponte de Lembretes.app`.
+O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra o agente de sincronização, compila o aplicativo nativo e o instala em `~/Applications/Reminders Sync.app`. Um segundo agente abre apenas o painel da barra de menus no login; encerrar o aplicativo não encerra o sincronizador.
 
 O aplicativo também pode ser recompilado e instalado separadamente:
 
