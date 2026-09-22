@@ -5,9 +5,7 @@ SOURCE_DIR="${0:A:h}"
 INSTALL_DIR="${BRIDGE_INSTALL_DIR:-$HOME/Library/Application Support/AppleGoogleRemindersBridge}"
 LAUNCH_DIR="$HOME/Library/LaunchAgents"
 LABEL="${BRIDGE_SYNC_LABEL:-com.local.apple-google-reminders-bridge}"
-DASHBOARD_LABEL="${BRIDGE_DASHBOARD_LABEL:-com.local.apple-google-reminders-dashboard}"
 PLIST_PATH="$LAUNCH_DIR/$LABEL.plist"
-DASHBOARD_PLIST_PATH="$LAUNCH_DIR/$DASHBOARD_LABEL.plist"
 
 PYTHON_BIN="${BRIDGE_PYTHON:-$(command -v python3 || true)}"
 REMINDCTL_BIN="${BRIDGE_REMINDCTL:-$(command -v remindctl || true)}"
@@ -34,9 +32,7 @@ mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/secrets" "$INSTALL_DIR/runtime" "$LAUN
 chmod 700 "$INSTALL_DIR" "$INSTALL_DIR/secrets" "$INSTALL_DIR/runtime"
 
 install -m 700 "$SOURCE_DIR/bridge.py" "$INSTALL_DIR/bridge.py"
-install -m 700 "$SOURCE_DIR/dashboard.py" "$INSTALL_DIR/dashboard.py"
 install -m 700 "$SOURCE_DIR/run-sync.sh" "$INSTALL_DIR/run-sync.sh"
-install -m 700 "$SOURCE_DIR/open-dashboard.command" "$INSTALL_DIR/open-dashboard.command"
 install -m 600 "$SOURCE_DIR/requirements.txt" "$INSTALL_DIR/requirements.txt"
 install -m 700 "$REMINDCTL_BIN" "$INSTALL_DIR/bin/remindctl"
 install -m 600 "$CREDENTIALS_SOURCE" "$INSTALL_DIR/secrets/credentials.json"
@@ -52,31 +48,19 @@ fi
 "$INSTALL_DIR/.venv/bin/python" -m pip install --quiet --disable-pip-version-check -r "$INSTALL_DIR/requirements.txt"
 
 sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$SOURCE_DIR/launchd.plist.template" > "$PLIST_PATH"
-sed \
-  -e "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
-  -e "s|__DASHBOARD_LABEL__|$DASHBOARD_LABEL|g" \
-  -e "s|__SYNC_LABEL__|$LABEL|g" \
-  -e "s|__SYNC_PLIST__|$PLIST_PATH|g" \
-  "$SOURCE_DIR/dashboard.plist.template" > "$DASHBOARD_PLIST_PATH"
 chmod 600 "$PLIST_PATH"
-chmod 600 "$DASHBOARD_PLIST_PATH"
 plutil -lint "$PLIST_PATH"
-plutil -lint "$DASHBOARD_PLIST_PATH"
 
 user_id=$(id -u)
 launchctl bootout "gui/$user_id/$LABEL" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$user_id" "$PLIST_PATH"
 launchctl enable "gui/$user_id/$LABEL"
 launchctl kickstart -k "gui/$user_id/$LABEL"
-launchctl bootout "gui/$user_id/$DASHBOARD_LABEL" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$user_id" "$DASHBOARD_PLIST_PATH"
-launchctl enable "gui/$user_id/$DASHBOARD_LABEL"
-launchctl kickstart -k "gui/$user_id/$DASHBOARD_LABEL"
+"$SOURCE_DIR/build-macos-app.command"
 
 echo
 echo "Instalação concluída. A sincronização rodará a cada 5 minutos."
-echo "Painel: http://127.0.0.1:8765"
+echo "Aplicativo: $HOME/Applications/Ponte de Lembretes.app"
 echo "Logs: $INSTALL_DIR/runtime/sync.log"
-open -a Safari "http://127.0.0.1:8765"
 echo
 read "?Pressione Enter para fechar esta janela..."

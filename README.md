@@ -2,9 +2,9 @@
 
 Ponte local bidirecional, segura por padrão. A execução normal é uma simulação (`dry-run`); qualquer gravação exige explicitamente `--apply --confirm APPLY`.
 
-## Painel local
+## Aplicativo para macOS
 
-O painel abre em [http://127.0.0.1:8765](http://127.0.0.1:8765) e permite:
+`Ponte de Lembretes.app` é um aplicativo nativo em SwiftUI. Ele fica disponível no Finder, Spotlight, Dock e barra de menus e permite:
 
 - conferir se o serviço está funcionando;
 - ver a última e a próxima execução;
@@ -12,7 +12,7 @@ O painel abre em [http://127.0.0.1:8765](http://127.0.0.1:8765) e permite:
 - pausar e retomar a sincronização sem fechar o painel;
 - solicitar uma sincronização imediata.
 
-Ele aceita conexões somente do próprio Mac. Os comandos usam um token local com permissão `600`, e nenhuma credencial do Google é enviada ao navegador.
+O aplicativo lê apenas os arquivos locais de estado e histórico. Ele não abre portas de rede, não usa navegador e não recebe as credenciais do Google.
 
 ## Proteções
 
@@ -80,7 +80,13 @@ BRIDGE_STATE=/caminho/state.json \
 ./install.command
 ```
 
-O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra agentes separados para a sincronização e para o painel, inicia a primeira sincronização e abre o painel no Safari.
+O instalador copia o serviço para `~/Library/Application Support/AppleGoogleRemindersBridge`, protege credenciais e estado, registra o agente de sincronização, compila o aplicativo nativo e o instala em `~/Applications/Ponte de Lembretes.app`.
+
+O aplicativo também pode ser recompilado e instalado separadamente:
+
+```bash
+./build-macos-app.command
+```
 
 Para alterar o intervalo, edite `StartInterval` no template antes da instalação. O valor é expresso em segundos.
 

@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 secrets/
 runtime/
+build/
 *.log
 *.plist
 !launchd.plist.template
