@@ -833,16 +833,93 @@ struct RemindersSyncPopover: View {
     }
 }
 
+@MainActor
+final class RemindersSyncAppDelegate: NSObject, NSApplicationDelegate {
+    private let monitor = BridgeMonitor()
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.setActivationPolicy(.accessory)
+
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = Self.statusImage()
+        item.button?.imagePosition = .imageOnly
+        item.button?.toolTip = "Reminders Sync"
+        item.button?.target = self
+        item.button?.action = #selector(togglePanel)
+        statusItem = item
+
+        let panel = NSPopover()
+        panel.behavior = .transient
+        panel.contentSize = NSSize(width: 655, height: 468)
+        panel.contentViewController = NSHostingController(
+            rootView: RemindersSyncPopover().environmentObject(monitor)
+        )
+        popover = panel
+
+        if !ProcessInfo.processInfo.arguments.contains("--background") {
+            DispatchQueue.main.async { self.showPanel() }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showPanel()
+        return true
+    }
+
+    @objc private func togglePanel() {
+        if popover?.isShown == true {
+            popover?.performClose(nil)
+        } else {
+            showPanel()
+        }
+    }
+
+    private func showPanel() {
+        guard let button = statusItem?.button, let popover else { return }
+        monitor.refresh()
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private static func statusImage() -> NSImage {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.setStroke()
+            let outline = NSBezierPath(roundedRect: NSRect(x: 2, y: 2, width: 14, height: 13), xRadius: 2, yRadius: 2)
+            outline.lineWidth = 1.3
+            outline.stroke()
+
+            let details = NSBezierPath()
+            details.lineWidth = 1.25
+            details.lineCapStyle = .round
+            details.move(to: NSPoint(x: 2.8, y: 11.2))
+            details.line(to: NSPoint(x: 15.2, y: 11.2))
+            details.move(to: NSPoint(x: 6, y: 16))
+            details.line(to: NSPoint(x: 6, y: 13.7))
+            details.move(to: NSPoint(x: 12, y: 16))
+            details.line(to: NSPoint(x: 12, y: 13.7))
+            details.move(to: NSPoint(x: 7.5, y: 8))
+            details.line(to: NSPoint(x: 13, y: 8))
+            details.move(to: NSPoint(x: 7.5, y: 5))
+            details.line(to: NSPoint(x: 12, y: 5))
+            details.stroke()
+            NSBezierPath(ovalIn: NSRect(x: 4.6, y: 7.3, width: 1.4, height: 1.4)).fill()
+            NSBezierPath(ovalIn: NSRect(x: 4.6, y: 4.3, width: 1.4, height: 1.4)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+}
+
 @main
 struct RemindersSyncApp: App {
-    @StateObject private var monitor = BridgeMonitor()
+    @NSApplicationDelegateAdaptor(RemindersSyncAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            RemindersSyncPopover().environmentObject(monitor)
-        } label: {
-            RemindersSyncGlyph(monochrome: true)
-        }
-        .menuBarExtraStyle(.window)
+        Settings { EmptyView() }
     }
 }

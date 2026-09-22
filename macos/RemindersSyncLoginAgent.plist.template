@@ -9,6 +9,8 @@
     <string>/usr/bin/open</string>
     <string>-a</string>
     <string>__APP_PATH__</string>
+    <string>--args</string>
+    <string>--background</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

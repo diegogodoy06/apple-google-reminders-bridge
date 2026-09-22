@@ -4,7 +4,7 @@ Ponte local bidirecional, segura por padrão. A execução normal é uma simula�
 
 ## Aplicativo para macOS
 
-`Reminders Sync.app` é um aplicativo nativo em SwiftUI que abre na barra de menus ao iniciar a sessão do macOS. Clique no símbolo de calendário e lista no alto da tela para abrir o painel. Ele permite:
+`Reminders Sync.app` é um aplicativo nativo em SwiftUI que fica na barra de menus ao iniciar a sessão do macOS. Clique no símbolo de calendário e lista no alto da tela ou abra o aplicativo no Finder para mostrar o painel. Ele permite:
 
 - conferir se o serviço está funcionando;
 - ver a última e a próxima execução;
